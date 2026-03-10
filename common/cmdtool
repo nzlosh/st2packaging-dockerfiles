@@ -21,19 +21,21 @@ configure_base()
 {
     case "$TGT" in
         rocky*)
-            # RedHat specific tools.
             yum install -y yum-utils
-            dnf config-manager --enable powertools
-            yum install -y epel-release
+            dnf install -y dnf-plugin-config-manager
+            dnf config-manager --enable crb
+            dnf install -y epel-release
             PKGS=(
                 ImageMagick
                 ImageMagick-devel
                 libyaml-devel
                 glibc-langpack-en
+                mercurial
             )
-            yum -y install ${PKGS[@]}
-            dnf config-manager --disable powertools
-            yum remove -y epel-release yum-utils
+            dnf -y install ${PKGS[@]}
+            dnf remove -y epel-release yum-utils
+
+            dnf -y autoremove; dnf clean all
         ;;
         ubuntu*)
             # Make noninteractive setting permanent
@@ -62,10 +64,13 @@ configure_sshkeys()
     case "$TGT" in
         rocky*)
             ssh-keygen -t rsa -N '' -f /etc/ssh/ssh_host_rsa_key
+            #EL9 enable RSA
+            update-crypto-policies --set DEFAULT:SHA1
         ;;
         ubuntu*)
-            # noop - nothing to do.
-            true
+            # Enable (deprecated) RSA
+            echo 'HostKeyAlgorithms +ssh-rsa' >>/etc/ssh/sshd_config
+            echo 'PubkeyAcceptedKeyTypes +ssh-rsa' >>/etc/ssh/sshd_config
         ;;
         *)
             distro_unsupported
@@ -78,21 +83,38 @@ configure_sshkeys()
     sed -ri 's/^#?PubkeyAuthentication\s+.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
     sed -ri 's/requiretty/!requiretty/' /etc/sudoers
     echo 'root:docker.io' | chpasswd
-    # Enable (deprecated) RSA
-    echo 'HostKeyAlgorithms +ssh-rsa' >>/etc/ssh/sshd_config
-    echo 'PubkeyAcceptedKeyTypes +ssh-rsa' >>/etc/ssh/sshd_config
 
     mkdir /var/run/sshd
 }
 
 install_locale()
 {
-    # install locales package and set default locale to
-    # 'UTF-8' for the test execution environment.
-    apt-get -y install locales
-    locale-gen en_US.UTF-8
-    dpkg-reconfigure locales
-    update-locale LANG=en_US.UTF-8
+    case "$TGT" in
+        rocky*)
+            PKGS=(
+                nc
+                net-tools
+                glibc-locale-source
+            )
+            dnf -y install ${PKGS[@]}
+            dnf -y autoremove; dnf clean all
+
+            # -i: specify the locale definition file
+            # -f: specify the character set
+            localedef -i en_US -f UTF-8 en_US.UTF-8
+        ;;
+        ubuntu*)
+            # install locales package and set default locale to
+            # 'UTF-8' for the test execution environment.
+            apt-get -y install locales
+            locale-gen en_US.UTF-8
+            dpkg-reconfigure locales
+            update-locale LANG=en_US.UTF-8
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
 }
 
 install_download_tools()
@@ -101,13 +123,18 @@ install_download_tools()
         rocky*)
             PKGS=(
                 ca-certificates
-                curl
-                wget
+                iproute
                 nc
-                iproute2
                 net-tools
+                procps
+                setup
+                subversion
+                wget
             )
             dnf -y install ${PKGS[@]}
+            # work around package manager confusion when installing curl.
+            dnf -y --allowerasing install curl
+            dnf -y autoremove; dnf clean all
         ;;
         ubuntu*)
             PKGS=(
@@ -134,24 +161,48 @@ install_download_tools()
 
 configure_testing_system()
 {
-    # Not sure why this is required.
-    find /etc/systemd/system \
-         /lib/systemd/system \
-         -path '*.wants/*' \
-         -not -name '*journald*' \
-         -not -name '*systemd-tmpfiles*' \
-         -not -name '*systemd-user-sessions*' \
-         -exec rm \{} \;
+    case "$TGT" in
+        rocky*)
+            cd /lib/systemd/system/sysinit.target.wants/
+            ls -1 | grep -v systemd-tmpfiles-setup.service | xargs rm
+            rm -f /etc/systemd/system/*.wants/*
+            rm -f /lib/systemd/system/local-fs.target.wants/*
+            rm -f /lib/systemd/system/sockets.target.wants/*udev*
+            rm -f /lib/systemd/system/sockets.target.wants/*initctl*
+            rm -f /lib/systemd/system/basic.target.wants/*
+            rm -f /lib/systemd/system/anaconda.target.wants/*
+            systemctl preset sshd
 
-    systemctl set-default multi-user.target
+            # install doc files (/usr/share/docs) when installing yum packages
+            # otherwise /usr/share/docs/st2/conf/nginx/st2.conf won't be present
+            # https://github.com/docker-library/docs/tree/master/centos#package-documentation
+            sed -i '/nodocs/d' /etc/yum.conf
+        ;;
+        ubuntu*)
+            # TO DO: This may be a pre-systemd relica.
+            find /etc/systemd/system \
+                 /lib/systemd/system \
+                 -path '*.wants/*' \
+                 -not -name '*journald*' \
+                 -not -name '*systemd-tmpfiles*' \
+                 -not -name '*systemd-user-sessions*' \
+                 -exec rm \{} \;
 
-    # The base Ubuntu 18.04 image contains a file that excludes all documentation
-    # from being installed by packages. Specifically /usr/share/doc/*
-    # This exclusion prevents our nginx config from being installed in the 'st2' package:
-    # /usr/share/doc/st2/conf/nginx/st2.conf
-    # This step removes the exclusion configuration so documentation of all future packages
-    # will be installed.
-    rm -rf /etc/dpkg/dpkg.cfg.d/excludes
+            systemctl set-default multi-user.target
+
+            # The base Ubuntu 18.04 image contains a file that excludes
+            # all documentation from being installed by packages.
+            # Specifically /usr/share/doc/* This exclusion prevents our
+            # nginx config from being installed in the 'st2' package:
+            # /usr/share/doc/st2/conf/nginx/st2.conf
+            # This step removes the exclusion configuration so
+            # documentation of all future packages will be installed.
+            rm -rf /etc/dpkg/dpkg.cfg.d/excludes
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
 }
 
 install_system_tools()
@@ -161,9 +212,11 @@ install_system_tools()
             PKGS=(
                 git
                 openssh-server
+                openssh-clients
                 sudo
             )
             dnf -y install ${PKGS[@]}
+            dnf -y autoremove; dnf clean all
         ;;
         ubuntu*)
             PKGS=(
@@ -208,15 +261,33 @@ install_build_dependencies()
                 mysql-devel
                 ncurses-devel
                 openssl-devel
+                pam
                 patch
                 postgresql-devel
                 readline-devel
                 sqlite-devel
+                unzip
                 xz
                 xz-devel
+                zip
                 zlib-devel
             )
             dnf -y install ${PKGS[@]}
+            dnf -y autoremove; dnf clean all
+            case "$TGT" in
+                rocky-9*)
+                    PKGS=(
+                        python39
+                        python3-devel
+                    )
+                    dnf -y install ${PKGS[@]}
+                    dnf -y autoremove; dnf clean all
+                ;;
+                *)
+                    echo "Unsupported Redhat compatible version."
+                    exit 1
+                ;;
+            esac
         ;;
         ubuntu*)
             PKGS=(
@@ -259,6 +330,7 @@ install_st2_build_dependencies()
                 openldap-devel
             )
             dnf -y install ${PKGS[@]}
+            dnf -y autoremove; dnf clean all
         ;;
         ubuntu*)
             PKGS=(
@@ -283,22 +355,20 @@ install_python()
     case "$TGT" in
         rocky*)
             PKGS=(
-                python38
-                python38-devel
+                python3
+                python3-devel
                 rpmdevtools
-                python3-virtualenv
             )
             dnf -y install ${PKGS[@]}
-            # Install development tools and python3.8 for EL8
+            dnf -y autoremove; dnf clean all
+
             PYPKGS=(
                 "virtualenv==20.30.0"
                 "pip==25.0.1"
                 wheel
                 setuptools
-                "requests[security]"
-                venvctrl
             )
-            pip3.8 install --upgrade ${PYPKGS[@]}
+            pip3 install --upgrade ${PYPKGS[@]}
             rm -rf /root/.cache
         ;;
         ubuntu*)
