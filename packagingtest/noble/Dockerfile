@@ -17,6 +17,8 @@ RUN /usr/local/bin/cmdtool install_system_tools
 RUN /usr/local/bin/cmdtool install_locale
 ENV LANG=en_US.UTF-8
 
+RUN /usr/local/bin/cmdtool install_download_tools
+
 RUN /usr/local/bin/cmdtool configure_testing_system
 
 RUN systemctl preset ssh;

@@ -4,7 +4,7 @@ set -e +x -o pipefail
 
 # Set the TGT to identify the OS and version.
 TGT=$(source /etc/os-release; echo "${ID}-${VERSION_ID}")
-
+# e.g. ubuntu-22.04, ubuntu-24.04, debian-11, rocky-9.7, rocky-9.5, rocky-10.1 etc.
 distro_unsupported()
 {
     echo "Unsupported distro $TGT" >&2
@@ -321,8 +321,20 @@ install_python()
                 "requests[security]"
             )
             # Violate system package manager and force our requirements ...  Leroy Jenkins!
-            apt install --only-upgrade python3-pip
-            pip3 install --ignore-installed --break-system-packages --upgrade ${PYPKGS[@]}
+            case $TGT in
+                ubuntu-22*)
+                    apt install --only-upgrade python3-pip
+                    pip3 install --ignore-installed --upgrade ${PYPKGS[@]}
+                ;;
+                ubuntu-24*)
+                    apt install --only-upgrade python3-pip
+                    pip3 install --ignore-installed --break-system-packages --upgrade ${PYPKGS[@]}
+                ;;
+                *)
+                    echo "Unsupported Ubuntu version."
+                    exit 1
+                ;;
+            esac
             rm -rf /root/.cache
         ;;
         *)
