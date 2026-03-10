@@ -1,0 +1,367 @@
+#!/bin/bash
+
+set -e +x -o pipefail
+
+# Set the TGT to identify the OS and version.
+TGT=$(source /etc/os-release; echo "${ID}-${VERSION_ID}")
+
+distro_unsupported()
+{
+    echo "Unsupported distro $TGT" >&2
+    exit 1
+}
+
+# Detect unsupported distribution early.
+if [[ ! "$TGT" =~ rocky|ubuntu ]]; then
+    distro_unsupported
+fi
+
+
+configure_base()
+{
+    case "$TGT" in
+        rocky*)
+            # RedHat specific tools.
+            yum install -y yum-utils
+            dnf config-manager --enable powertools
+            yum install -y epel-release
+            PKGS=(
+                ImageMagick
+                ImageMagick-devel
+                libyaml-devel
+                glibc-langpack-en
+            )
+            yum -y install ${PKGS[@]}
+            dnf config-manager --disable powertools
+            yum remove -y epel-release yum-utils
+        ;;
+        ubuntu*)
+            # Make noninteractive setting permanent
+            export DEBIAN_FRONTEND=noninteractive
+            echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections -v
+            apt update
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
+}
+
+
+configure_sshkeys()
+{
+    # Create busybee credentials and make busybee pkey available for root
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    # This command depends on the dockerfile copying the ssh key pair
+    # to /tmp before executing this script.
+    mv /tmp/busybee* /root/.ssh
+    cat /root/.ssh/busybee.pub >>/root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/busybee
+
+    case "$TGT" in
+        rocky*)
+            ssh-keygen -t rsa -N '' -f /etc/ssh/ssh_host_rsa_key
+        ;;
+        ubuntu*)
+            # noop - nothing to do.
+            true
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
+
+    # 1. permit root logins and set simple password password and pubkey
+    # 2. change requiretty to !requiretty in /etc/sudoers
+    sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    sed -ri 's/^#?PubkeyAuthentication\s+.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+    sed -ri 's/requiretty/!requiretty/' /etc/sudoers
+    echo 'root:docker.io' | chpasswd
+    # Enable (deprecated) RSA
+    echo 'HostKeyAlgorithms +ssh-rsa' >>/etc/ssh/sshd_config
+    echo 'PubkeyAcceptedKeyTypes +ssh-rsa' >>/etc/ssh/sshd_config
+
+    mkdir /var/run/sshd
+}
+
+install_locale()
+{
+    # install locales package and set default locale to
+    # 'UTF-8' for the test execution environment.
+    apt-get -y install locales
+    locale-gen en_US.UTF-8
+    dpkg-reconfigure locales
+    update-locale LANG=en_US.UTF-8
+}
+
+install_download_tools()
+{
+    case "$TGT" in
+        rocky*)
+            PKGS=(
+                ca-certificates
+                curl
+                wget
+                nc
+                iproute2
+                net-tools
+            )
+            dnf -y install ${PKGS[@]}
+        ;;
+        ubuntu*)
+            PKGS=(
+                ca-certificates
+                apt-transport-https
+                gdebi-core
+                sshpass
+                cron
+                curl
+                wget
+                netcat-traditional
+                net-tools
+                iproute2
+                netbase
+            )
+            apt -y install ${PKGS[@]}
+            apt clean
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
+}
+
+configure_testing_system()
+{
+    # Not sure why this is required.
+    find /etc/systemd/system \
+         /lib/systemd/system \
+         -path '*.wants/*' \
+         -not -name '*journald*' \
+         -not -name '*systemd-tmpfiles*' \
+         -not -name '*systemd-user-sessions*' \
+         -exec rm \{} \;
+
+    systemctl set-default multi-user.target
+
+    # The base Ubuntu 18.04 image contains a file that excludes all documentation
+    # from being installed by packages. Specifically /usr/share/doc/*
+    # This exclusion prevents our nginx config from being installed in the 'st2' package:
+    # /usr/share/doc/st2/conf/nginx/st2.conf
+    # This step removes the exclusion configuration so documentation of all future packages
+    # will be installed.
+    rm -rf /etc/dpkg/dpkg.cfg.d/excludes
+}
+
+install_system_tools()
+{
+    case "$TGT" in
+        rocky*)
+            PKGS=(
+                git
+                openssh-server
+                sudo
+            )
+            dnf -y install ${PKGS[@]}
+        ;;
+        ubuntu*)
+            PKGS=(
+                git
+                openssh-server
+                sudo
+            )
+            apt -y install ${PKGS[@]}
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
+
+    configure_sshkeys
+}
+
+
+install_build_dependencies()
+{
+    case "$TGT" in
+        rocky*)
+            PKGS=(
+                autoconf
+                automake
+                bzip2
+                bzip2-devel
+                file
+                gcc
+                gcc-c++
+                glib2-devel
+                glibc-devel
+                libcurl-devel
+                libevent-devel
+                libffi-devel
+                libjpeg-devel
+                libtool
+                libwebp-devel
+                libxml2-devel
+                libxslt-devel
+                make
+                mysql-devel
+                ncurses-devel
+                openssl-devel
+                patch
+                postgresql-devel
+                readline-devel
+                sqlite-devel
+                xz
+                xz-devel
+                zlib-devel
+            )
+            dnf -y install ${PKGS[@]}
+        ;;
+        ubuntu*)
+            PKGS=(
+                build-essential
+                python3-venv
+                python3-setuptools
+                python3-mock
+                python3-sphinx
+                dh-exec
+                dh-python
+                libjs-jquery
+                libjs-underscore
+                python3-sphinx-rtd-theme
+            )
+            apt -y install ${PKGS[@]}
+            apt clean
+
+            # Use upstream dh-virtualenv master branch that includes StackStorm's
+            # 'python' shebang fix since 8 Dec 2020.  We reset the repository to
+            # use the known good commit sha id 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
+            git clone --branch master https://github.com/spotify/dh-virtualenv.git /tmp/dh-virtualenv
+            cd /tmp/dh-virtualenv
+            git reset --hard 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
+            dpkg-buildpackage -b -uc -us && dpkg -i ../dh-virtualenv_*.deb
+            rm -rf /tmp/dh-virtualenv*
+            # apt -y install dh-systemd && apt clean
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
+}
+
+
+install_st2_build_dependencies()
+{
+    case "$TGT" in
+        rocky*)
+            PKGS=(
+                openldap-devel
+            )
+            dnf -y install ${PKGS[@]}
+        ;;
+        ubuntu*)
+            PKGS=(
+                devscripts
+                debhelper
+                dh-make
+                libldap2-dev
+                libsasl2-dev
+            )
+            apt -y install ${PKGS[@]}
+            apt clean
+            ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
+}
+
+
+install_python()
+{
+    case "$TGT" in
+        rocky*)
+            PKGS=(
+                python38
+                python38-devel
+                rpmdevtools
+                python3-virtualenv
+            )
+            dnf -y install ${PKGS[@]}
+            # Install development tools and python3.8 for EL8
+            PYPKGS=(
+                "virtualenv==20.30.0"
+                "pip==25.0.1"
+                wheel
+                setuptools
+                "requests[security]"
+                venvctrl
+            )
+            pip3.8 install --upgrade ${PYPKGS[@]}
+            rm -rf /root/.cache
+        ;;
+        ubuntu*)
+            # install python development
+            PKGS=(
+                python3-dev
+                python3
+                python3-pip
+            )
+            apt -y install ${PKGS[@]}
+            apt clean
+            # Install fresh pip and co (pinning wheel and setuptools<60 is
+            # require for dh-virtualenv build to avoid pypa/setuptools#2956)
+            PYPKGS=(
+                "virtualenv==20.30.0"
+                "pip==25.0.1"
+                "wheel==0.45.1"
+                "setuptools==59.8.0"
+                cryptography
+                "requests[security]"
+            )
+            # Violate system package manager and force our requirements ...  Leroy Jenkins!
+            apt install --only-upgrade python3-pip
+            pip3 install --ignore-installed --break-system-packages --upgrade ${PYPKGS[@]}
+            rm -rf /root/.cache
+        ;;
+        *)
+            distro_unsupported
+        ;;
+    esac
+}
+
+
+execute_operation()
+{
+    test -n "$1" && test -n "$2" && test "$1" = "$2"
+}
+run()
+{
+    # Permitted operation calls to be run from docker build.
+    OPS=(
+        configure_base
+        install_download_tools
+        install_system_tools
+        install_python
+        install_build_dependencies
+        install_st2_build_dependencies
+        install_locale
+        configure_testing_system
+    )
+    OP="$1"
+    EXEC=0
+    for ALLOWED_OP in ${OPS[@]}
+    do
+        if execute_operation "$OP" "$ALLOWED_OP"; then
+            "$1"
+            EXEC=1
+        fi
+    done
+    if [[ $EXEC -eq 0 ]]; then
+        echo "Operation $1 failed to be executed!"
+        exit 1
+    fi
+}
+
+run "$1"

@@ -12,16 +12,16 @@ RUN yum -y install \
 RUN yum install -y yum-utils \
     && dnf install -y dnf-plugin-config-manager \
     && dnf config-manager --enable crb \
-    && yum install -y epel-release \
-    && yum -y install \
+    && dnf install -y epel-release \
+    && dnf -y install \
     ImageMagick \
     ImageMagick-devel \
     libyaml-devel \
     glibc-langpack-en \
-    && yum remove -y epel-release yum-utils
+    && dnf remove -y epel-release yum-utils
 
 # Build tools
-RUN yum -y install \
+RUN dnf -y install \
     autoconf \
     automake \
     bzip2 \
@@ -52,30 +52,27 @@ RUN yum -y install \
     zlib-devel
 
 # St2 package build debs
-RUN yum -y install \
+RUN dnf -y install \
     openldap-devel
 
-# Enable remote pubkey access
-RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh && \
-    echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCdCmmPjsOBWRXc+PKdgDRrsciNjp25zTacyz8Gdkln2ma046brOYXAphhp/85DKgHtANBBt3cl4+HnpDbmAfyq2qZT7hWzAbMxtq0Sj+yyFyUdreXoe4gEKyxpV6o8p/R/XzEcawvqX/vFc5EIFmvTdamxZs9DQmOE5AZMzUB18Kerkrb0/arUcZ8iMi9Ng9a18avow+7oUFZ6Oub7ISz/dkIRojaKO/2paJZ4p+v7ZLn7Hq8TUeBkgAlx872oh8J8linhIq17zK6x4MGL8qiurp2hnfe0cuCxwcsYGy+4DfK51+E2vks6FprCIfF5hIdz26euPn67/YpM0F0b5nXF busybee@drone" >> /root/.ssh/authorized_keys
-
 # Create busybee credentials and make busybee pkey available for root
-COPY busybee*  /root/.ssh/
-RUN chmod 600 /root/.ssh/busybee
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
+COPY ../common/busybee* /root/.ssh/
+RUN chmod 600 /root/.ssh/busybee && \
+    cat root/.ssh/busybee.pub >>/root/.ssh/authorized_keys
 
 RUN yum -y install openssh-server sudo && \
-  ssh-keygen -t rsa -N '' -f /etc/ssh/ssh_host_rsa_key
+    ssh-keygen -t rsa -N '' -f /etc/ssh/ssh_host_rsa_key
 
-# 1. small fix for SSH in ubuntu 13.10 (that's harmless everywhere else)
-# 2. permit root logins and set simple password password and pubkey
-# 3. change requiretty to !requiretty in /etc/sudoers
-RUN sed -ri 's/^session\s+required\s+pam_loginuid.so$/session optional pam_loginuid.so/' /etc/pam.d/sshd && \
-        sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-        sed -ri 's/^#?PubkeyAuthentication\s+.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
-        sed -ri 's/requiretty/!requiretty/' /etc/sudoers && \
-        echo 'root:docker.io' | chpasswd
+# 1. permit root logins and set simple password password and pubkey
+# 2. change requiretty to !requiretty in /etc/sudoers
+RUN sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/'            /etc/ssh/sshd_config && \
+    sed -ri 's/^#?PubkeyAuthentication\s+.*/PubkeyAuthentication yes/'  /etc/ssh/sshd_config && \
+    sed -ri 's/requiretty/!requiretty/' /etc/sudoers && \
+    echo "root:${ROOT_PW}" | chpasswd
 
-RUN yum -y install nc net-tools
+RUN dnf -y install nc net-tools
+
 #EL9 enable RSA
 RUN update-crypto-policies --set DEFAULT:SHA1
 
@@ -86,7 +83,7 @@ RUN update-crypto-policies --set DEFAULT:SHA1
 #
 
 # Install development tools and python3 for EL9
-RUN yum -y install python3 python3-devel rpmdevtools && \
+RUN dnf -y install python3 python3-devel rpmdevtools && \
     pip3 install virtualenv==20.30.0 pip==25.0.1 wheel setuptools
 
 RUN rm -rf /root/.cache

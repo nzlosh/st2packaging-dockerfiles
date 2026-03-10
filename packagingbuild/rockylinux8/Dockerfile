@@ -6,10 +6,12 @@ RUN yum -y install \
     curl \
     wget
 
+# System tools
 RUN yum -y install \
     git \
     openssh
 
+# RedHat specific tools.
 RUN yum install -y yum-utils \
     && dnf config-manager --enable powertools \
     && yum install -y epel-release \

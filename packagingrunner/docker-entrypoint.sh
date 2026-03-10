@@ -7,16 +7,16 @@ cp /root/Gemfile* ./
 operation="${1:-complete}"
 
 case "$operation" in
-build)
-  bundle exec rake build:all
-  ;;
-test)
-  bundle exec rake setup:all && bundle exec rspec
-  ;;
-complete)
-  bundle exec rake && bundle exec rspec
-  ;;
-*)
-  [ $# -gt 0 ] && exec "$@"
-  ;;
+    build)
+        rake build:all
+    ;;
+    test)
+        rake setup:all && rspec
+    ;;
+    complete)
+        rake && rspec
+    ;;
+    *)
+        [ $# -gt 0 ] && exec "$@"
+    ;;
 esac
