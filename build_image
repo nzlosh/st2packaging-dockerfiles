@@ -1,0 +1,78 @@
+#!/bin/bash
+
+set -e +x -o pipefail
+
+function bootstrap_docker()
+{
+    sudo apt-get update --quiet --quiet
+    sudo apt-get install apt-transport-https ca-certificates curl gnupg-agent software-properties-common jq
+
+    export CODENAME=$(source /etc/os-release && echo "$VERSION_CODENAME")
+    export DISTRO=$(source /etc/os-release && echo "$ID")
+    export ARCH=$(dpkg --print-architecture)
+    # get gpg key for download.docker
+    curl -fsSL https://download.docker.com/linux/${DISTRO}/gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/download.docker.gpg
+    sudo tee <<<"deb [arch=${ARCH}] https://download.docker.com/linux/${DISTRO} ${CODENAME} stable" /etc/apt/sources.list.d/download.docker.list
+    sudo apt update --quiet --quiet
+    sudo apt install docker-ce docker-ce-cli docker-compose-plugin
+    sudo usermod -a -G docker vagrant
+}
+
+function build()
+{
+    local CODENAME="$1"
+
+    date_suffix=$(date +%Y-%m-%d)
+
+    echo "Building packagingbuild image..."
+    (docker build --progress plain -f "packagingbuild/${CODENAME}/Dockerfile" -t "stackstorm/packagingbuild:${CODENAME}" -t "stackstorm/packagingbuild:${CODENAME}-${date_suffix}" .) || exit -1
+
+    echo "Building packagingtest image..."
+    (docker build --progress plain -f "packagingtest/${CODENAME}/Dockerfile" -t "stackstorm/packagingtest:${CODENAME}" -t "stackstorm/packagingtest:${CODENAME}-${date_suffix}" .) || exit -1
+}
+
+function build_target()
+{
+    local CODENAME="$1"
+    for DOCKERFILE in packagingbuild/$CODENAME/Dockerfile
+    do
+        TARGET_PATH=$(dirname $DOCKERFILE)
+        TARGET=$(basename $TARGET_PATH)
+        build $TARGET
+    done
+}
+
+function usage()
+{
+    cat <<EOF
+Usage $0 <bootstrap|build [distro]>
+
+        bootstrap       - Configure the system with the Docker repository and
+                          install Docker CE and Docker Compose packages.  (Ubuntu only)
+        build [distro]  - Build the Docker images for the given distro codename.
+                          Builds all distros when no codename provided.
+
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 1
+fi
+
+case "$1" in
+    "bootstrap")
+        bootstrap_docker
+    ;;
+    "build")
+        if [[ -n "$2" ]]; then
+            build_target "$2"
+        else
+            build_target '*'
+        fi
+    ;;
+    *)
+        usage
+        exit 1
+    ;;
+esac

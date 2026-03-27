@@ -19,13 +19,26 @@ See [packagingtest/](packagingtest/)
 
 # How To Build Theses Containers (developer)
 
-If you're a developer looking to modify / test / build these containers simply, change into 
-the container's directory and do the following:
+If you're a developer looking to modify / test / build these containers a convenience script `build_image` can
+be used to setup docker and build the docker images.
+
 
 ``` shell
-cd st2packaging-dockerfiles/packagingbuild/focal
-docker build -t stackstorm/packagingbuild:focal .
+# ./build_image 
+Usage ./build_image <bootstrap|build [distro]>
 
-cd st2packaging-dockerfiles/packagingtest/focal
-docker build -t stackstorm/packagingtest:focal .
+        bootstrap       - Configure the system with the Docker repository and
+                          install Docker CE and Docker Compose packages.
+        build [distro]  - Build the Docker images for the given distro codename.
+                          Builds all distros when no codename provided.
+
+# ./build_image build focal
+```
+
+Or by invoking docker directly
+
+```
+export TGT=noble
+cd st2packaging-dockerfiles/packagingtest
+docker build -f $TGT/Dockefile -t stackstorm/packagingtest:$TGT .
 ```

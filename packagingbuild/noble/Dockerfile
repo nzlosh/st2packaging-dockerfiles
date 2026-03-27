@@ -1,4 +1,4 @@
-FROM ubuntu:jammy
+FROM ubuntu:noble
 
 # Install helper command tool
 COPY common/cmdtool /usr/local/bin
