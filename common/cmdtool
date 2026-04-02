@@ -10,6 +10,11 @@ distro_unsupported()
     echo "Unsupported distro $TGT" >&2
     exit 1
 }
+version_unsupported()
+{
+    echo "Unsupported distro version $TGT" >&2
+    exit 1
+}
 
 # Detect unsupported distribution early.
 if [[ ! "$TGT" =~ rocky|ubuntu ]]; then
@@ -274,20 +279,6 @@ install_build_dependencies()
             )
             dnf -y install ${PKGS[@]}
             dnf -y autoremove; dnf clean all
-            case "$TGT" in
-                rocky-9*)
-                    PKGS=(
-                        python39
-                        python3-devel
-                    )
-                    dnf -y install ${PKGS[@]}
-                    dnf -y autoremove; dnf clean all
-                ;;
-                *)
-                    echo "Unsupported Redhat compatible version."
-                    exit 1
-                ;;
-            esac
         ;;
         ubuntu*)
             PKGS=(
@@ -354,19 +345,53 @@ install_python()
 {
     case "$TGT" in
         rocky*)
-            PKGS=(
-                python3
-                python3-devel
-                rpmdevtools
-            )
-            dnf -y install ${PKGS[@]}
-            dnf -y autoremove; dnf clean all
+            case "$TGT" in
+                *9.*)
+                    # St2 v3.10 supports py3.11
+                    PKGS+=(
+                        python3.11
+                        python3.11-devel
+                        python3.11-pip
+                        python3.11-setuptools
+                        rpmdevtools
+                    )
+                    # Set py3.11 as default python3 interpreter for the system
+                    for alt in python pip
+                    do
+                        alternatives --install /usr/bin/${alt} ${alt} /usr/bin/${alt}3.11 50
+                        alternatives --install /usr/bin/${alt}3 ${alt}3 /usr/bin/${alt}3.11 50
+                        alternatives --set ${alt} /usr/bin/${alt}3.11
+                        alternatives --set ${alt}3 /usr/bin/${alt}3.11
+                    done
+
+                    dnf -y install ${PKGS[@]}
+                    dnf -y autoremove; dnf clean all
+                ;;
+                *10.*)
+                    # Py3.12 is default on rocky10
+                    PKGS+=(
+                        python3
+                        python3-devel
+                        python3-setuptools
+                        rpmdevtools
+                    )
+                    dnf -y install ${PKGS[@]}
+                    dnf -y autoremove; dnf clean all
+                ;;
+                *)
+                    version_unsupported
+                ;;
+            esac
+            echo "PYTHON/PIP VERSION"
+            python3 --version
+            pip3 --version
 
             PYPKGS=(
                 "virtualenv==20.30.0"
                 "pip==25.0.1"
                 wheel
                 setuptools
+                build
             )
             pip3 install --upgrade ${PYPKGS[@]}
             rm -rf /root/.cache
@@ -391,18 +416,17 @@ install_python()
                 "requests[security]"
             )
             # Violate system package manager and force our requirements ...  Leroy Jenkins!
-            case $TGT in
-                ubuntu-22*)
+            case "$TGT" in
+                *22.*)
                     apt install --only-upgrade python3-pip
                     pip3 install --ignore-installed --upgrade ${PYPKGS[@]}
                 ;;
-                ubuntu-24*)
+                *24.*)
                     apt install --only-upgrade python3-pip
                     pip3 install --ignore-installed --break-system-packages --upgrade ${PYPKGS[@]}
                 ;;
                 *)
-                    echo "Unsupported Ubuntu version."
-                    exit 1
+                    version_unsupported
                 ;;
             esac
             rm -rf /root/.cache
@@ -414,14 +438,14 @@ install_python()
 }
 
 
-execute_operation()
+compare_operations()
 {
     test -n "$1" && test -n "$2" && test "$1" = "$2"
 }
 run()
 {
     # Permitted operation calls to be run from docker build.
-    OPS=(
+    ALLOWED_OPS=(
         configure_base
         install_download_tools
         install_system_tools
@@ -433,9 +457,9 @@ run()
     )
     OP="$1"
     EXEC=0
-    for ALLOWED_OP in ${OPS[@]}
+    for ALLOWED_OP in ${ALLOWED_OPS[@]}
     do
-        if execute_operation "$OP" "$ALLOWED_OP"; then
+        if compare_operations "$OP" "$ALLOWED_OP"; then
             "$1"
             EXEC=1
         fi

@@ -18,7 +18,7 @@ RUN /usr/local/bin/cmdtool install_st2_build_dependencies
 
 RUN /usr/local/bin/cmdtool install_python
 
-VOLUME ['/home/busybee/build']
+VOLUME ["/home/busybee/build"]
 EXPOSE 22
 
 # Run ssh daemon in foreground and wait for bees to connect.
