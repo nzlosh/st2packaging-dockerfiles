@@ -4,6 +4,8 @@ set -e +x -o pipefail
 
 function bootstrap_docker()
 {
+    grep -q ubuntu /etc/os-release || {echo "Docker bootstrap is only available on Ubuntu.  Feel free to add your OS/distro."}
+    read -p "Press <ENTER> to proceed with installation." ENTER
     sudo apt-get update --quiet --quiet
     sudo apt-get install apt-transport-https ca-certificates curl gnupg-agent software-properties-common jq
 
@@ -25,10 +27,19 @@ function build()
     date_suffix=$(date +%Y-%m-%d)
 
     echo "Building packagingbuild image..."
-    (docker build --progress plain -f "packagingbuild/${CODENAME}/Dockerfile" -t "stackstorm/packagingbuild:${CODENAME}" -t "stackstorm/packagingbuild:${CODENAME}-${date_suffix}" .) || exit -1
+    (docker build --progress plain -f "packagingbuild/${CODENAME}/Dockerfile" -t "${CODENAME}-build" -t "stackstorm/packagingbuild:${CODENAME}" -t "stackstorm/packagingbuild:${CODENAME}-${date_suffix}" .) || exit -1
 
     echo "Building packagingtest image..."
-    (docker build --progress plain -f "packagingtest/${CODENAME}/Dockerfile" -t "stackstorm/packagingtest:${CODENAME}" -t "stackstorm/packagingtest:${CODENAME}-${date_suffix}" .) || exit -1
+    (docker build --progress plain -f "packagingtest/${CODENAME}/Dockerfile" -t "${CODENAME}-test"  -t "stackstorm/packagingtest:${CODENAME}" -t "stackstorm/packagingtest:${CODENAME}-${date_suffix}" .) || exit -1
+}
+
+function build_runner()
+{
+    date_suffix=$(date +%Y-%m-%d)
+
+    echo "Building packagingrunner image..."
+    (docker build --progress plain -f "packagingrunner/Dockerfile" -t "packagingrunner" -t "stackstorm/packagingrunner" -t "stackstorm/packagingrunner-${date_suffix}" .) || exit -1
+
 }
 
 function build_target()
@@ -51,7 +62,7 @@ Usage $0 <bootstrap|build [distro]>
                           install Docker CE and Docker Compose packages.  (Ubuntu only)
         build [distro]  - Build the Docker images for the given distro codename.
                           Builds all distros when no codename provided.
-
+        build-runner    - Builds the packaging runner image.
 EOF
 }
 
@@ -63,6 +74,9 @@ fi
 case "$1" in
     "bootstrap")
         bootstrap_docker
+    ;;
+    "build-runner")
+        build_runner
     ;;
     "build")
         if [[ -n "$2" ]]; then

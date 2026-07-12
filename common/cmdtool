@@ -26,21 +26,35 @@ configure_base()
 {
     case "$TGT" in
         rocky*)
+            PKGS=(
+                ImageMagick
+                ImageMagick-devel
+                glibc-langpack-en
+                mercurial
+            )
+            case "$TGT" in
+                *9.*)
+                    PKGS+=(libyaml-devel)
+                ;;
+                *10.*)
+                    # fallback: libyaml-devel package is unavailble on rocky10
+                    PKGS+=(libyaml)
+                ;;
+                *)
+                    version_unsupported
+                ;;
+            esac
             yum install -y yum-utils
             dnf install -y dnf-plugin-config-manager
             dnf config-manager --enable crb
             dnf install -y epel-release
-            PKGS=(
-                ImageMagick
-                ImageMagick-devel
-                libyaml-devel
-                glibc-langpack-en
-                mercurial
-            )
+            dnf update -y
+
             dnf -y install ${PKGS[@]}
             dnf remove -y epel-release yum-utils
 
-            dnf -y autoremove; dnf clean all
+            dnf -y autoremove
+            dnf clean all
         ;;
         ubuntu*)
             # Make noninteractive setting permanent
@@ -60,22 +74,19 @@ configure_sshkeys()
     # Create busybee credentials and make busybee pkey available for root
     mkdir -p /root/.ssh
     chmod 700 /root/.ssh
-    # This command depends on the dockerfile copying the ssh key pair
-    # to /tmp before executing this script.
+    # The below commands depend on the dockerfile copying the ssh key pair
+    # to /tmp before this script is executed.
     mv /tmp/busybee* /root/.ssh
     cat /root/.ssh/busybee.pub >>/root/.ssh/authorized_keys
     chmod 600 /root/.ssh/busybee
 
     case "$TGT" in
         rocky*)
-            ssh-keygen -t rsa -N '' -f /etc/ssh/ssh_host_rsa_key
-            #EL9 enable RSA
-            update-crypto-policies --set DEFAULT:SHA1
+            ssh-keygen -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
         ;;
         ubuntu*)
-            # Enable (deprecated) RSA
-            echo 'HostKeyAlgorithms +ssh-rsa' >>/etc/ssh/sshd_config
-            echo 'PubkeyAcceptedKeyTypes +ssh-rsa' >>/etc/ssh/sshd_config
+            # noop
+            true
         ;;
         *)
             distro_unsupported
@@ -220,6 +231,7 @@ install_system_tools()
                 openssh-clients
                 sudo
             )
+            ls /etc/crypto-policies/policies/modules/
             dnf -y install ${PKGS[@]}
             dnf -y autoremove; dnf clean all
         ;;
@@ -263,7 +275,6 @@ install_build_dependencies()
                 libxml2-devel
                 libxslt-devel
                 make
-                mysql-devel
                 ncurses-devel
                 openssl-devel
                 pam
@@ -277,6 +288,18 @@ install_build_dependencies()
                 zip
                 zlib-devel
             )
+            case "$TGT" in
+                *9.*)
+                    PKGS+=(mysql-devel)
+                ;;
+                *10.*)
+                    # rocky10 includes the version number in mysql-devel package name.
+                    PKGS+=(mysql8.4-devel)
+                ;;
+                *)
+                    version_unsupported
+                ;;
+            esac
             dnf -y install ${PKGS[@]}
             dnf -y autoremove; dnf clean all
         ;;
@@ -289,6 +312,7 @@ install_build_dependencies()
                 python3-sphinx
                 dh-exec
                 dh-python
+                dh-virtualenv
                 libjs-jquery
                 libjs-underscore
                 python3-sphinx-rtd-theme
@@ -299,11 +323,11 @@ install_build_dependencies()
             # Use upstream dh-virtualenv master branch that includes StackStorm's
             # 'python' shebang fix since 8 Dec 2020.  We reset the repository to
             # use the known good commit sha id 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
-            git clone --branch master https://github.com/spotify/dh-virtualenv.git /tmp/dh-virtualenv
-            cd /tmp/dh-virtualenv
-            git reset --hard 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
-            dpkg-buildpackage -b -uc -us && dpkg -i ../dh-virtualenv_*.deb
-            rm -rf /tmp/dh-virtualenv*
+            ##git clone --branch master https://github.com/spotify/dh-virtualenv.git /tmp/dh-virtualenv
+            ##cd /tmp/dh-virtualenv
+            ##git reset --hard 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
+            ##dpkg-buildpackage -b -uc -us && dpkg -i ../dh-virtualenv_*.deb
+            ##rm -rf /tmp/dh-virtualenv*
             # apt -y install dh-systemd && apt clean
         ;;
         *)
@@ -343,6 +367,14 @@ install_st2_build_dependencies()
 
 install_python()
 {
+    # Python packages installed for all distribution types.
+    COMMON_PYPKGS=(
+        "virtualenv==21.5.1"
+        "pip==26.1.2"
+        "setuptools==82.0.1"
+        "wheel==0.45.1"
+        build
+    )
     case "$TGT" in
         rocky*)
             case "$TGT" in
@@ -356,13 +388,9 @@ install_python()
                         rpmdevtools
                     )
                     # Set py3.11 as default python3 interpreter for the system
-                    for alt in python pip
-                    do
-                        alternatives --install /usr/bin/${alt} ${alt} /usr/bin/${alt}3.11 50
-                        alternatives --install /usr/bin/${alt}3 ${alt}3 /usr/bin/${alt}3.11 50
-                        alternatives --set ${alt} /usr/bin/${alt}3.11
-                        alternatives --set ${alt}3 /usr/bin/${alt}3.11
-                    done
+                    export PYBIN=python3.11
+                    export PIPBIN=pip3.11
+                    # disable to see if the package build works correctly.
 
                     dnf -y install ${PKGS[@]}
                     dnf -y autoremove; dnf clean all
@@ -375,6 +403,8 @@ install_python()
                         python3-setuptools
                         rpmdevtools
                     )
+                    export PYBIN=python3.12
+                    export PIPBIN=pip3.12
                     dnf -y install ${PKGS[@]}
                     dnf -y autoremove; dnf clean all
                 ;;
@@ -383,17 +413,12 @@ install_python()
                 ;;
             esac
             echo "PYTHON/PIP VERSION"
-            python3 --version
-            pip3 --version
+            $PYBIN --version
+            $PIPBIN --version
 
-            PYPKGS=(
-                "virtualenv==20.30.0"
-                "pip==25.0.1"
-                wheel
-                setuptools
-                build
-            )
-            pip3 install --upgrade ${PYPKGS[@]}
+            PYPKGS=(${COMMON_PYPKGS[@]})
+
+            $PIPBIN install --upgrade ${PYPKGS[@]}
             rm -rf /root/.cache
         ;;
         ubuntu*)
@@ -407,11 +432,8 @@ install_python()
             apt clean
             # Install fresh pip and co (pinning wheel and setuptools<60 is
             # require for dh-virtualenv build to avoid pypa/setuptools#2956)
-            PYPKGS=(
-                "virtualenv==20.30.0"
-                "pip==25.0.1"
-                "wheel==0.45.1"
-                "setuptools==59.8.0"
+            PYPKGS=(${COMMON_PYPKGS[@]})
+            PYPKGS+=(
                 cryptography
                 "requests[security]"
             )
