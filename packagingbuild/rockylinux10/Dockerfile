@@ -1,4 +1,4 @@
-FROM rockylinux:9
+FROM rockylinux/rockylinux:10
 
 # Install helper command tool
 COPY common/cmdtool /usr/local/bin

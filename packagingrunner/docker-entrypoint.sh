@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Configure Ruby environment
+eval "$(~/.rbenv/bin/rbenv init - --no-rehash bash)"
+
 # Copy Gemfile* to WORKING_DIR
 cp /root/Gemfile* ./
 
@@ -8,15 +11,21 @@ operation="${1:-complete}"
 
 case "$operation" in
     build)
-        rake build:all
-    ;;
+        bundle exec rake build:all
+        ;;
     test)
-        rake setup:all && rspec
-    ;;
+        bundle exec rake setup:all && bundle exec rspec
+        ;;
     complete)
-        rake && rspec
-    ;;
+        bundle exec rake && bundle exec rspec
+        ;;
+    alt-test)
+        echo to do: testinfra.
+        ;;
+    alt-build)
+        echo to do: build package fabric
+        ;;
     *)
         [ $# -gt 0 ] && exec "$@"
-    ;;
+        ;;
 esac

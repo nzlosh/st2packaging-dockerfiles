@@ -10,6 +10,11 @@ distro_unsupported()
     echo "Unsupported distro $TGT" >&2
     exit 1
 }
+version_unsupported()
+{
+    echo "Unsupported distro version $TGT" >&2
+    exit 1
+}
 
 # Detect unsupported distribution early.
 if [[ ! "$TGT" =~ rocky|ubuntu ]]; then
@@ -21,21 +26,35 @@ configure_base()
 {
     case "$TGT" in
         rocky*)
+            PKGS=(
+                ImageMagick
+                ImageMagick-devel
+                glibc-langpack-en
+                mercurial
+            )
+            case "$TGT" in
+                *9.*)
+                    PKGS+=(libyaml-devel)
+                ;;
+                *10.*)
+                    # fallback: libyaml-devel package is unavailble on rocky10
+                    PKGS+=(libyaml)
+                ;;
+                *)
+                    version_unsupported
+                ;;
+            esac
             yum install -y yum-utils
             dnf install -y dnf-plugin-config-manager
             dnf config-manager --enable crb
             dnf install -y epel-release
-            PKGS=(
-                ImageMagick
-                ImageMagick-devel
-                libyaml-devel
-                glibc-langpack-en
-                mercurial
-            )
+            dnf update -y
+
             dnf -y install ${PKGS[@]}
             dnf remove -y epel-release yum-utils
 
-            dnf -y autoremove; dnf clean all
+            dnf -y autoremove
+            dnf clean all
         ;;
         ubuntu*)
             # Make noninteractive setting permanent
@@ -55,22 +74,19 @@ configure_sshkeys()
     # Create busybee credentials and make busybee pkey available for root
     mkdir -p /root/.ssh
     chmod 700 /root/.ssh
-    # This command depends on the dockerfile copying the ssh key pair
-    # to /tmp before executing this script.
+    # The below commands depend on the dockerfile copying the ssh key pair
+    # to /tmp before this script is executed.
     mv /tmp/busybee* /root/.ssh
     cat /root/.ssh/busybee.pub >>/root/.ssh/authorized_keys
     chmod 600 /root/.ssh/busybee
 
     case "$TGT" in
         rocky*)
-            ssh-keygen -t rsa -N '' -f /etc/ssh/ssh_host_rsa_key
-            #EL9 enable RSA
-            update-crypto-policies --set DEFAULT:SHA1
+            ssh-keygen -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
         ;;
         ubuntu*)
-            # Enable (deprecated) RSA
-            echo 'HostKeyAlgorithms +ssh-rsa' >>/etc/ssh/sshd_config
-            echo 'PubkeyAcceptedKeyTypes +ssh-rsa' >>/etc/ssh/sshd_config
+            # noop
+            true
         ;;
         *)
             distro_unsupported
@@ -258,7 +274,6 @@ install_build_dependencies()
                 libxml2-devel
                 libxslt-devel
                 make
-                mysql-devel
                 ncurses-devel
                 openssl-devel
                 pam
@@ -272,22 +287,20 @@ install_build_dependencies()
                 zip
                 zlib-devel
             )
-            dnf -y install ${PKGS[@]}
-            dnf -y autoremove; dnf clean all
             case "$TGT" in
-                rocky-9*)
-                    PKGS=(
-                        python39
-                        python3-devel
-                    )
-                    dnf -y install ${PKGS[@]}
-                    dnf -y autoremove; dnf clean all
+                *9.*)
+                    PKGS+=(mysql-devel)
+                ;;
+                *10.*)
+                    # rocky10 includes the version number in mysql-devel package name.
+                    PKGS+=(mysql8.4-devel)
                 ;;
                 *)
-                    echo "Unsupported Redhat compatible version."
-                    exit 1
+                    version_unsupported
                 ;;
             esac
+            dnf -y install ${PKGS[@]}
+            dnf -y autoremove; dnf clean all
         ;;
         ubuntu*)
             PKGS=(
@@ -298,6 +311,7 @@ install_build_dependencies()
                 python3-sphinx
                 dh-exec
                 dh-python
+                dh-virtualenv
                 libjs-jquery
                 libjs-underscore
                 python3-sphinx-rtd-theme
@@ -308,11 +322,11 @@ install_build_dependencies()
             # Use upstream dh-virtualenv master branch that includes StackStorm's
             # 'python' shebang fix since 8 Dec 2020.  We reset the repository to
             # use the known good commit sha id 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
-            git clone --branch master https://github.com/spotify/dh-virtualenv.git /tmp/dh-virtualenv
-            cd /tmp/dh-virtualenv
-            git reset --hard 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
-            dpkg-buildpackage -b -uc -us && dpkg -i ../dh-virtualenv_*.deb
-            rm -rf /tmp/dh-virtualenv*
+            ##git clone --branch master https://github.com/spotify/dh-virtualenv.git /tmp/dh-virtualenv
+            ##cd /tmp/dh-virtualenv
+            ##git reset --hard 9bd6d3fac3ea9b53e12bfedeef53f0a73c57b2cd
+            ##dpkg-buildpackage -b -uc -us && dpkg -i ../dh-virtualenv_*.deb
+            ##rm -rf /tmp/dh-virtualenv*
             # apt -y install dh-systemd && apt clean
         ;;
         *)
@@ -352,23 +366,58 @@ install_st2_build_dependencies()
 
 install_python()
 {
+    # Python packages installed for all distribution types.
+    COMMON_PYPKGS=(
+        "virtualenv==21.5.1"
+        "pip==26.1.2"
+        "setuptools==82.0.1"
+        "wheel==0.45.1"
+        build
+    )
     case "$TGT" in
         rocky*)
-            PKGS=(
-                python3
-                python3-devel
-                rpmdevtools
-            )
-            dnf -y install ${PKGS[@]}
-            dnf -y autoremove; dnf clean all
+            case "$TGT" in
+                *9.*)
+                    # St2 v3.10 supports py3.11
+                    PKGS+=(
+                        python3.11
+                        python3.11-devel
+                        python3.11-pip
+                        python3.11-setuptools
+                        rpmdevtools
+                    )
+                    # Set py3.11 as default python3 interpreter for the system
+                    export PYBIN=python3.11
+                    export PIPBIN=pip3.11
+                    # disable to see if the package build works correctly.
 
-            PYPKGS=(
-                "virtualenv==20.30.0"
-                "pip==25.0.1"
-                wheel
-                setuptools
-            )
-            pip3 install --upgrade ${PYPKGS[@]}
+                    dnf -y install ${PKGS[@]}
+                    dnf -y autoremove; dnf clean all
+                ;;
+                *10.*)
+                    # Py3.12 is default on rocky10
+                    PKGS+=(
+                        python3
+                        python3-devel
+                        python3-setuptools
+                        rpmdevtools
+                    )
+                    export PYBIN=python3.12
+                    export PIPBIN=pip3.12
+                    dnf -y install ${PKGS[@]}
+                    dnf -y autoremove; dnf clean all
+                ;;
+                *)
+                    version_unsupported
+                ;;
+            esac
+            echo "PYTHON/PIP VERSION"
+            $PYBIN --version
+            $PIPBIN --version
+
+            PYPKGS=(${COMMON_PYPKGS[@]})
+
+            $PIPBIN install --upgrade ${PYPKGS[@]}
             rm -rf /root/.cache
         ;;
         ubuntu*)
@@ -382,27 +431,23 @@ install_python()
             apt clean
             # Install fresh pip and co (pinning wheel and setuptools<60 is
             # require for dh-virtualenv build to avoid pypa/setuptools#2956)
-            PYPKGS=(
-                "virtualenv==20.30.0"
-                "pip==25.0.1"
-                "wheel==0.45.1"
-                "setuptools==59.8.0"
+            PYPKGS=(${COMMON_PYPKGS[@]})
+            PYPKGS+=(
                 cryptography
                 "requests[security]"
             )
             # Violate system package manager and force our requirements ...  Leroy Jenkins!
-            case $TGT in
-                ubuntu-22*)
+            case "$TGT" in
+                *22.*)
                     apt install --only-upgrade python3-pip
                     pip3 install --ignore-installed --upgrade ${PYPKGS[@]}
                 ;;
-                ubuntu-24*)
+                *24.*)
                     apt install --only-upgrade python3-pip
                     pip3 install --ignore-installed --break-system-packages --upgrade ${PYPKGS[@]}
                 ;;
                 *)
-                    echo "Unsupported Ubuntu version."
-                    exit 1
+                    version_unsupported
                 ;;
             esac
             rm -rf /root/.cache
@@ -414,14 +459,14 @@ install_python()
 }
 
 
-execute_operation()
+compare_operations()
 {
     test -n "$1" && test -n "$2" && test "$1" = "$2"
 }
 run()
 {
     # Permitted operation calls to be run from docker build.
-    OPS=(
+    ALLOWED_OPS=(
         configure_base
         install_download_tools
         install_system_tools
@@ -433,9 +478,9 @@ run()
     )
     OP="$1"
     EXEC=0
-    for ALLOWED_OP in ${OPS[@]}
+    for ALLOWED_OP in ${ALLOWED_OPS[@]}
     do
-        if execute_operation "$OP" "$ALLOWED_OP"; then
+        if compare_operations "$OP" "$ALLOWED_OP"; then
             "$1"
             EXEC=1
         fi
