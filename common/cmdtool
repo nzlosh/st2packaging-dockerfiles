@@ -231,7 +231,6 @@ install_system_tools()
                 openssh-clients
                 sudo
             )
-            ls /etc/crypto-policies/policies/modules/
             dnf -y install ${PKGS[@]}
             dnf -y autoremove; dnf clean all
         ;;
